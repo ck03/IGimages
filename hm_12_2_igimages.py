@@ -8,6 +8,7 @@ import os
 from pymongo import MongoClient
 from copy import deepcopy
 import datetime as dt
+from fake_useragent import UserAgent
 
 
 class IGImagesSpider:
@@ -24,13 +25,17 @@ class IGImagesSpider:
         self.result_list_json = []
         self.result_dict = {}
         self.temp_id = []
-        self.headers = {"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.100 Safari/537.36"}
+        self.ua = UserAgent()
+        # self.ua = self.ua.random
+        # self.headers = {"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.100 Safari/537.36"}
+        # self.headers = {"user-agent": self.ua}
         self.client = MongoClient(host="127.0.0.1", port=27017)
         self.collection = self.client["igimg"]["imginfo"]
         self.dbid_list = []
         self.today = today
         self.webposts = 0
         self.webpoststemp = 0
+        self.times = 1
 
     # 解析id
     def parser_str(self, sid):
@@ -40,17 +45,33 @@ class IGImagesSpider:
 
     # 下載圖片
     def downloadimg(self, url, folder_path, sid):
-        res = requests.get(url, headers=self.headers)
-        # 下載圖片到本地去
-        with open(folder_path + "{}_{}.jpg".format(self.cname, sid), "wb") as f:
-            f.write(res.content)
+        headers1 = self.ua.random
+        headers = {"user-agent": headers1}
+        print(headers)
+        try:
+            res = requests.get(url, headers=headers)
+            # 下載圖片到本地去
+            with open(folder_path + "{}_{}.jpg".format(self.cname, sid), "wb") as f:
+                f.write(res.content)
+            res.close()
+        except Exception as e:
+                print("Could not connect to server: %s" % e)
+                print(url)
+                # print("發生異常")
+                # break
+
 
     def get_content_list(self, folder_path):
         wait = WebDriverWait(self.driver, 2)
+        time.sleep(3)
         while True:
+            wait.until(
+                lambda driver: self.driver.find_element_by_xpath("//div[@class=' _2z6nI']/article/div[1]/div/div"))
             # 找是否有row
             div_list = self.driver.find_elements_by_xpath("//div[@class=' _2z6nI']/article/div[1]/div/div")
-            print(len(div_list))
+            # div_list = self.driver.find_elements_by_xpath("//ul[@class='k9GMp ']")
+            print("len=", len(div_list))
+            ilen = len(div_list)
 
             if len(div_list) > 0:
                 # row
@@ -92,6 +113,8 @@ class IGImagesSpider:
                                 # 下載到DB
                                 self.collection.insert_one(item)
                                 self.webposts -= 1
+                                if self.webposts % 100 == 0:
+                                    time.sleep(5)
                                 if self.webposts % 30 == 0:
                                     if self.webposts != 0:
                                         print("還剩{}張".format(self.webposts))
@@ -104,9 +127,16 @@ class IGImagesSpider:
                 # 已經找過的圖片張數 > 本次真的要下載張數的10倍就不再找了,加快速度
                 # 此段mark則會再全部掃一遍
                 if realcount > self.webpoststemp * 10:
+                    print("realcount=", realcount)
                     break
                 if icount == 0:
-                    break
+                    print("times=", self.times)
+                    time.sleep(5)
+                    self.times += 1
+                    if self.times > 6:
+                        break
+                else:
+                    self.times = 0
                 # 當區塊的row找完後將游標定位在最後一列
                 # 拖動到可见的元素去, 因為它是滾動頁面往下,所以此動作是在模擬頁面往下移到目前最後一個元素,代表頁面在滾動
                 self.driver.execute_script('arguments[0].scrollIntoView();', div_list[-1])
@@ -121,18 +151,21 @@ class IGImagesSpider:
     def diffposts(self):
         # 現在貼文總數
         webposts = self.driver.find_element_by_xpath("//section[@class='zwlfE']/ul/li[1]").text
+        # print(webposts)
         webposts = "".join(webposts)
+        # print(webposts)
         webposts = int(webposts.split(" ")[0].replace(",", ""))
 
-        # print(webposts)
+        print(webposts)
         dbposts = self.collection.find({"ename": "{}".format(self.ename)})
-        # print(dbposts.count())
+        print(dbposts.count())
         # 只有網頁的總貼文大於DB裡的貼文才需要下載
         # 可是要是IG刪掉圖片比新增的還多,則會有盲點,要注意此段是否需要變化
         # 因為比如我已下載100張了,但明天它有刪掉10張另外增加5張,則本次爬蟲不會跑.
         if webposts > dbposts.count():
             self.webposts = webposts - dbposts.count()
             self.webpoststemp = self.webposts
+            print("還剩{}張".format(self.webpoststemp))
             # 記錄db裡的id欄位以供後序比對
             if dbposts.count() > 0:
                 for sid in dbposts:
@@ -172,6 +205,7 @@ if __name__ == "__main__":
         name:中文名字
         cname:英文名字
         url: IG下載網址
+     
     """
     today = dt.date.today()
     today = str(today)
